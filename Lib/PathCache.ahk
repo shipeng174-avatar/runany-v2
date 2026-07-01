@@ -55,12 +55,7 @@ class PathCache {
     }
 
     static RunBackgroundRefresh() {
-        static started := false
         global INI_PATH, INI2_PATH
-
-        if started
-            return
-        started := true
 
         coreExe := ConfigReader.TransformVar(ConfigReader.ReadSetting("RunAnyCorePath", ""))
         if coreExe = ""
@@ -75,7 +70,10 @@ class PathCache {
         if ProcessExist("RunAnyCore.exe")
             return
 
-        cmd := PathCache._QuoteArg(coreExe) " cache rebuild " PathCache._QuoteArg(PathCache.CACHE_FILE) " --menu " PathCache._QuoteArg(INI_PATH)
+        missPath := A_ScriptDir "\RunAny_exe_misses.txt"
+        cmd := PathCache._QuoteArg(coreExe) " cache rebuild " PathCache._QuoteArg(PathCache.CACHE_FILE)
+        cmd .= " --miss " PathCache._QuoteArg(missPath)
+        cmd .= " --menu " PathCache._QuoteArg(INI_PATH)
         if FileExist(INI2_PATH)
             cmd .= " --menu " PathCache._QuoteArg(INI2_PATH)
 
@@ -88,6 +86,13 @@ class PathCache {
                     cmd .= " --everything-exe " PathCache._QuoteArg(evExe)
                 }
             }
+        }
+
+        if ConfigReader.ReadSetting("ZigIconWorker", "1") = "1" {
+            iconDir := ConfigReader.TransformVar(ConfigReader.ReadSetting("ExeIconDir", A_ScriptDir "\RunIcon\ExeIcon"))
+            cmd .= " --icon-dir " PathCache._QuoteArg(iconDir)
+            if ConfigReader.ReadSetting("ZigIconOverwrite", "0") = "1"
+                cmd .= " --icon-overwrite"
         }
 
         logPath := A_Temp "\RunAnyCore-cache.log"

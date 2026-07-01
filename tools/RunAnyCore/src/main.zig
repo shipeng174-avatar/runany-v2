@@ -5,6 +5,7 @@ const max_cache_bytes = 16 * 1024 * 1024;
 const max_menu_bytes = 16 * 1024 * 1024;
 const everything_chunk_size = 128;
 const everything_path_chars = 32768;
+const icon_size = 32;
 
 const CP_ACP = 0;
 
@@ -21,6 +22,42 @@ extern "kernel32" fn Sleep(dwMilliseconds: u32) callconv(.winapi) void;
 extern "kernel32" fn LoadLibraryW(lpLibFileName: [*:0]const u16) callconv(.winapi) ?*anyopaque;
 extern "kernel32" fn FreeLibrary(hLibModule: *anyopaque) callconv(.winapi) c_int;
 extern "kernel32" fn GetProcAddress(hModule: *anyopaque, lpProcName: [*:0]const u8) callconv(.winapi) ?*anyopaque;
+extern "shell32" fn PrivateExtractIconsW(
+    lpszFile: [*:0]const u16,
+    nIconIndex: c_int,
+    cxIcon: c_int,
+    cyIcon: c_int,
+    phicon: [*]?*anyopaque,
+    piconid: ?[*]u32,
+    nIcons: u32,
+    flags: u32,
+) callconv(.winapi) u32;
+extern "user32" fn DestroyIcon(hIcon: ?*anyopaque) callconv(.winapi) c_int;
+extern "user32" fn GetDC(hWnd: ?*anyopaque) callconv(.winapi) ?*anyopaque;
+extern "user32" fn ReleaseDC(hWnd: ?*anyopaque, hDC: ?*anyopaque) callconv(.winapi) c_int;
+extern "user32" fn DrawIconEx(
+    hdc: ?*anyopaque,
+    xLeft: c_int,
+    yTop: c_int,
+    hIcon: ?*anyopaque,
+    cxWidth: c_int,
+    cyWidth: c_int,
+    istepIfAniCur: u32,
+    hbrFlickerFreeDraw: ?*anyopaque,
+    diFlags: u32,
+) callconv(.winapi) c_int;
+extern "gdi32" fn CreateCompatibleDC(hdc: ?*anyopaque) callconv(.winapi) ?*anyopaque;
+extern "gdi32" fn DeleteDC(hdc: ?*anyopaque) callconv(.winapi) c_int;
+extern "gdi32" fn DeleteObject(ho: ?*anyopaque) callconv(.winapi) c_int;
+extern "gdi32" fn SelectObject(hdc: ?*anyopaque, h: ?*anyopaque) callconv(.winapi) ?*anyopaque;
+extern "gdi32" fn CreateDIBSection(
+    hdc: ?*anyopaque,
+    pbmi: *const BITMAPINFO,
+    usage: u32,
+    ppvBits: *?*anyopaque,
+    hSection: ?*anyopaque,
+    offset: u32,
+) callconv(.winapi) ?*anyopaque;
 
 const Stats = struct {
     total_lines: usize = 0,
@@ -43,18 +80,33 @@ const CacheData = struct {
 const TargetData = struct {
     map: std.StringHashMap(void),
     keys: std.ArrayList([]const u8),
+    items: std.ArrayList(TargetItem),
     menu_files: usize = 0,
     menu_lines: usize = 0,
     exe_refs: usize = 0,
     duplicate_refs: usize = 0,
 };
 
+const TargetItem = struct {
+    key: []const u8,
+    display: []const u8,
+};
+
+const MissData = struct {
+    map: std.StringHashMap([]const u8),
+    keys: std.ArrayList([]const u8),
+};
+
 const RebuildOptions = struct {
     cache_path: []const u8,
     write_back: bool = false,
+    force: bool = false,
     menu_paths: std.ArrayList([]const u8) = .empty,
     everything_dll: ?[]const u8 = null,
     everything_exe: ?[]const u8 = null,
+    miss_path: ?[]const u8 = null,
+    icon_dir: ?[]const u8 = null,
+    icon_overwrite: bool = false,
     log_path: ?[]const u8 = null,
 };
 
@@ -69,11 +121,69 @@ const RebuildStats = struct {
     target_unique: usize = 0,
     already_cached: usize = 0,
     missing_before_resolve: usize = 0,
+    skipped_known_misses: usize = 0,
     everything_queries: usize = 0,
     everything_results: usize = 0,
+    everything_rejected: usize = 0,
     everything_resolved: usize = 0,
+    misses_written: usize = 0,
+    icons_attempted: usize = 0,
+    icons_written: usize = 0,
+    icons_skipped: usize = 0,
+    icons_failed: usize = 0,
     written_entries: usize = 0,
     elapsed_ms: u64 = 0,
+};
+
+const ResolveStats = struct {
+    queries: usize = 0,
+    results: usize = 0,
+    rejected: usize = 0,
+    resolved: usize = 0,
+};
+
+const Candidate = struct {
+    path: []const u8,
+    score: i32,
+};
+
+const PathDecision = struct {
+    accept: bool,
+    reason: []const u8,
+    score: i32 = 0,
+};
+
+const IconStats = struct {
+    attempted: usize = 0,
+    written: usize = 0,
+    skipped: usize = 0,
+    failed: usize = 0,
+};
+
+const BITMAPINFOHEADER = extern struct {
+    biSize: u32,
+    biWidth: i32,
+    biHeight: i32,
+    biPlanes: u16,
+    biBitCount: u16,
+    biCompression: u32,
+    biSizeImage: u32,
+    biXPelsPerMeter: i32,
+    biYPelsPerMeter: i32,
+    biClrUsed: u32,
+    biClrImportant: u32,
+};
+
+const RGBQUAD = extern struct {
+    rgbBlue: u8,
+    rgbGreen: u8,
+    rgbRed: u8,
+    rgbReserved: u8,
+};
+
+const BITMAPINFO = extern struct {
+    bmiHeader: BITMAPINFOHEADER,
+    bmiColors: [1]RGBQUAD,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -113,6 +223,8 @@ pub fn main(init: std.process.Init) !void {
             const arg = args[i];
             if (std.mem.eql(u8, arg, "--write")) {
                 options.write_back = true;
+            } else if (std.mem.eql(u8, arg, "--force")) {
+                options.force = true;
             } else if (std.mem.eql(u8, arg, "--menu")) {
                 i += 1;
                 if (i >= args.len) return error.InvalidArguments;
@@ -125,6 +237,16 @@ pub fn main(init: std.process.Init) !void {
                 i += 1;
                 if (i >= args.len) return error.InvalidArguments;
                 options.everything_exe = args[i];
+            } else if (std.mem.eql(u8, arg, "--miss")) {
+                i += 1;
+                if (i >= args.len) return error.InvalidArguments;
+                options.miss_path = args[i];
+            } else if (std.mem.eql(u8, arg, "--icon-dir")) {
+                i += 1;
+                if (i >= args.len) return error.InvalidArguments;
+                options.icon_dir = args[i];
+            } else if (std.mem.eql(u8, arg, "--icon-overwrite")) {
+                options.icon_overwrite = true;
             } else if (std.mem.eql(u8, arg, "--log")) {
                 i += 1;
                 if (i >= args.len) return error.InvalidArguments;
@@ -168,7 +290,7 @@ fn usage(writer: *Io.Writer) Io.Writer.Error!void {
     try writer.writeAll(
         \\RunAnyCore cache stats <RunAny_exe_paths.txt>
         \\RunAnyCore cache compact <RunAny_exe_paths.txt> [--write]
-        \\RunAnyCore cache rebuild <RunAny_exe_paths.txt> --menu <RunAny.ini> [--menu <RunAny2.ini>] [--everything-dll <Everything64.dll>] [--everything-exe <Everything.exe>] [--write] [--log <file>]
+        \\RunAnyCore cache rebuild <RunAny_exe_paths.txt> --menu <RunAny.ini> [--menu <RunAny2.ini>] [--everything-dll <Everything64.dll>] [--everything-exe <Everything.exe>] [--miss <RunAny_exe_misses.txt>] [--icon-dir <RunIcon\ExeIcon>] [--force] [--write] [--log <file>]
         \\
     );
 }
@@ -181,30 +303,51 @@ fn rebuildCache(io: Io, allocator: std.mem.Allocator, options: RebuildOptions) !
     var targets = TargetData{
         .map = std.StringHashMap(void).init(allocator),
         .keys = .empty,
+        .items = .empty,
     };
     for (options.menu_paths.items) |menu_path| {
         try collectNoPathExesFromMenu(io, allocator, menu_path, &targets);
     }
     sortKeys(targets.keys.items);
 
+    var misses = try readMisses(io, allocator, options.miss_path);
     var missing: std.ArrayList([]const u8) = .empty;
     var already_cached: usize = 0;
+    var skipped_known_misses: usize = 0;
     for (targets.keys.items) |key| {
         if (cache.map.contains(key)) {
             already_cached += 1;
+        } else if (!options.force and misses.map.contains(key)) {
+            skipped_known_misses += 1;
         } else {
             try missing.append(allocator, key);
         }
     }
 
     var resolved: ResolveStats = .{};
-    if (missing.items.len > 0 and options.everything_dll != null) {
-        resolved = resolveMissingWithEverything(io, allocator, &cache, missing.items, options.everything_dll.?, options.everything_exe);
+    if (missing.items.len > 0) {
+        if (options.everything_dll) |dll_path| {
+            resolved = resolveMissingWithEverything(io, allocator, &cache, &misses, missing.items, dll_path, options.everything_exe);
+        } else {
+            for (missing.items) |key| {
+                try setMissReason(allocator, &misses, key, "no_everything_dll");
+            }
+        }
     }
 
     sortKeys(cache.keys.items);
     if (options.write_back) {
         try writeCompactedFile(io, options.cache_path, cache);
+    }
+
+    var misses_written: usize = 0;
+    if (options.write_back) {
+        misses_written = try writeCurrentMisses(io, options.miss_path, misses, targets.keys.items, cache);
+    }
+
+    var icon_stats: IconStats = .{};
+    if (options.icon_dir) |icon_dir| {
+        icon_stats = try rebuildIconCache(io, allocator, cache, targets.items.items, icon_dir, options.icon_overwrite);
     }
 
     const elapsed_ms = GetTickCount64() - started;
@@ -219,9 +362,16 @@ fn rebuildCache(io: Io, allocator: std.mem.Allocator, options: RebuildOptions) !
         .target_unique = targets.map.count(),
         .already_cached = already_cached,
         .missing_before_resolve = missing.items.len,
+        .skipped_known_misses = skipped_known_misses,
         .everything_queries = resolved.queries,
         .everything_results = resolved.results,
+        .everything_rejected = resolved.rejected,
         .everything_resolved = resolved.resolved,
+        .misses_written = misses_written,
+        .icons_attempted = icon_stats.attempted,
+        .icons_written = icon_stats.written,
+        .icons_skipped = icon_stats.skipped,
+        .icons_failed = icon_stats.failed,
         .written_entries = cache.map.count(),
         .elapsed_ms = elapsed_ms,
     };
@@ -291,6 +441,62 @@ fn readCache(io: Io, allocator: std.mem.Allocator, path: []const u8, missing_ok:
     return .{ .map = map, .keys = keys, .stats = stats };
 }
 
+fn readMisses(io: Io, allocator: std.mem.Allocator, path_opt: ?[]const u8) !MissData {
+    var data = MissData{
+        .map = std.StringHashMap([]const u8).init(allocator),
+        .keys = .empty,
+    };
+    const path = path_opt orelse return data;
+    const content = Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_cache_bytes)) catch |err| {
+        if (err == error.FileNotFound) return data;
+        return err;
+    };
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, stripUtf8Bom(raw_line), " \t\r\n");
+        if (line.len == 0 or line[0] == '#') continue;
+        const eq_pos = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const key = try normalizeKey(allocator, line[0..eq_pos]) orelse continue;
+        const reason = std.mem.trim(u8, line[eq_pos + 1 ..], " \t");
+        const result = try data.map.getOrPut(key);
+        if (!result.found_existing) {
+            try data.keys.append(allocator, key);
+        }
+        result.value_ptr.* = reason;
+    }
+    return data;
+}
+
+fn setMissReason(allocator: std.mem.Allocator, misses: *MissData, key: []const u8, reason: []const u8) !void {
+    const result = try misses.map.getOrPut(key);
+    if (!result.found_existing) {
+        try misses.keys.append(allocator, key);
+    }
+    result.value_ptr.* = reason;
+}
+
+fn writeCurrentMisses(io: Io, path_opt: ?[]const u8, misses: MissData, target_keys: []const []const u8, cache: CacheData) !usize {
+    const path = path_opt orelse return 0;
+    const file = try Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
+    defer file.close(io);
+
+    var buffer: [4096]u8 = undefined;
+    var file_writer: Io.File.Writer = .init(file, io, &buffer);
+    const writer = &file_writer.interface;
+
+    var written: usize = 0;
+    try writer.writeAll("# RunAnyCore unresolved no-path exe cache. Delete this file or run --force to retry all.\n");
+    for (target_keys) |key| {
+        if (cache.map.contains(key)) continue;
+        if (misses.map.get(key)) |reason| {
+            try writer.print("{s}={s}\n", .{ key, reason });
+            written += 1;
+        }
+    }
+    try writer.flush();
+    return written;
+}
+
 fn collectNoPathExesFromMenu(io: Io, allocator: std.mem.Allocator, path: []const u8, targets: *TargetData) !void {
     const raw_content = Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_menu_bytes)) catch |err| {
         if (err == error.FileNotFound) return;
@@ -317,6 +523,8 @@ fn collectNoPathExesFromMenu(io: Io, allocator: std.mem.Allocator, path: []const
 
         targets.exe_refs += 1;
         const key = try normalizeKey(allocator, exe_ref) orelse continue;
+        const display = try cleanDisplayName(allocator, extractDisplayName(line));
+        try targets.items.append(allocator, .{ .key = key, .display = display });
         const result = try targets.map.getOrPut(key);
         if (result.found_existing) {
             targets.duplicate_refs += 1;
@@ -350,6 +558,21 @@ fn extractRunPath(line: []const u8) []const u8 {
         return std.mem.trim(u8, line[idx + 1 ..], " \t");
     }
     return line;
+}
+
+fn extractDisplayName(line: []const u8) []const u8 {
+    if (std.mem.indexOfScalar(u8, line, '|')) |idx| {
+        return std.mem.trim(u8, line[0..idx], " \t");
+    }
+    return line;
+}
+
+fn cleanDisplayName(allocator: std.mem.Allocator, display: []const u8) ![]const u8 {
+    var s = std.mem.trim(u8, display, " \t\r\n");
+    if (std.mem.indexOfScalar(u8, s, '\t')) |idx| {
+        s = std.mem.trim(u8, s[0..idx], " \t\r\n");
+    }
+    return allocator.dupe(u8, s);
 }
 
 fn isSeparatorLine(line: []const u8) bool {
@@ -402,16 +625,11 @@ fn putCacheValue(allocator: std.mem.Allocator, cache: *CacheData, raw_key: []con
     return !result.found_existing;
 }
 
-const ResolveStats = struct {
-    queries: usize = 0,
-    results: usize = 0,
-    resolved: usize = 0,
-};
-
 fn resolveMissingWithEverything(
     io: Io,
     allocator: std.mem.Allocator,
     cache: *CacheData,
+    misses: *MissData,
     missing: []const []const u8,
     dll_path: []const u8,
     exe_path: ?[]const u8,
@@ -431,15 +649,22 @@ fn resolveMissingWithEverything(
     var offset: usize = 0;
     while (offset < missing.len) {
         const end = @min(offset + everything_chunk_size, missing.len);
+        const chunk = missing[offset..end];
         const regex = buildEverythingRegex(allocator, missing[offset..end]) catch break;
         const regex_w = std.unicode.utf8ToUtf16LeAllocZ(allocator, regex) catch break;
         sdk.set_search(regex_w.ptr);
         stats.queries += 1;
         if (sdk.query(1) == 0) {
+            for (chunk) |key| {
+                setMissReason(allocator, misses, key, "everything_query_failed") catch {};
+            }
             offset = end;
             continue;
         }
 
+        var candidates = std.StringHashMap(Candidate).init(allocator);
+        var seen = std.StringHashMap(void).init(allocator);
+        var rejected_reasons = std.StringHashMap([]const u8).init(allocator);
         const result_count = sdk.get_num_file_results();
         stats.results += result_count;
         var i: u32 = 0;
@@ -449,18 +674,227 @@ fn resolveMissingWithEverything(
             if (written == 0) continue;
             const len = std.mem.indexOfScalar(u16, buf[0..], 0) orelse @min(@as(usize, @intCast(written)), buf.len);
             const full_path = std.unicode.utf16LeToUtf8Alloc(allocator, buf[0..len]) catch continue;
-            if (!fileExists(io, full_path)) continue;
-            if (!shouldAcceptResolvedPath(full_path)) continue;
             const key = normalizeKey(allocator, full_path) catch continue orelse continue;
-            if (containsKey(missing[offset..end], key)) {
-                if (putCacheValue(allocator, cache, key, full_path) catch false) {
+            if (!containsKey(chunk, key)) continue;
+
+            _ = seen.getOrPut(key) catch {};
+            if (!fileExists(io, full_path)) {
+                stats.rejected += 1;
+                putRejectedReason(&rejected_reasons, key, "missing_path") catch {};
+                continue;
+            }
+            const decision = evaluateResolvedPath(full_path);
+            if (!decision.accept) {
+                stats.rejected += 1;
+                putRejectedReason(&rejected_reasons, key, decision.reason) catch {};
+                continue;
+            }
+
+            const candidate = candidates.getOrPut(key) catch continue;
+            if (!candidate.found_existing or decision.score > candidate.value_ptr.score or
+                (decision.score == candidate.value_ptr.score and full_path.len < candidate.value_ptr.path.len))
+            {
+                candidate.value_ptr.* = .{ .path = full_path, .score = decision.score };
+            }
+        }
+
+        for (chunk) |key| {
+            if (candidates.get(key)) |candidate| {
+                if (putCacheValue(allocator, cache, key, candidate.path) catch false) {
                     stats.resolved += 1;
                 }
+            } else if (seen.contains(key)) {
+                const reason = rejected_reasons.get(key) orelse "filtered_result";
+                setMissReason(allocator, misses, key, reason) catch {};
+            } else {
+                setMissReason(allocator, misses, key, "not_found") catch {};
             }
         }
         offset = end;
     }
     return stats;
+}
+
+fn putRejectedReason(reasons: *std.StringHashMap([]const u8), key: []const u8, reason: []const u8) !void {
+    const result = try reasons.getOrPut(key);
+    if (!result.found_existing) {
+        result.value_ptr.* = reason;
+    }
+}
+
+fn rebuildIconCache(
+    io: Io,
+    allocator: std.mem.Allocator,
+    cache: CacheData,
+    items: []const TargetItem,
+    icon_dir: []const u8,
+    overwrite: bool,
+) !IconStats {
+    Io.Dir.cwd().createDirPath(io, icon_dir) catch {};
+
+    var stats: IconStats = .{};
+    var emitted = std.StringHashMap(void).init(allocator);
+
+    for (items) |item| {
+        const exe_path = cache.map.get(item.key) orelse continue;
+        try maybeWriteIcon(io, allocator, &stats, &emitted, icon_dir, item.display, exe_path, overwrite);
+        const stem = keyStem(item.key);
+        try maybeWriteIcon(io, allocator, &stats, &emitted, icon_dir, stem, exe_path, overwrite);
+    }
+    return stats;
+}
+
+fn maybeWriteIcon(
+    io: Io,
+    allocator: std.mem.Allocator,
+    stats: *IconStats,
+    emitted: *std.StringHashMap(void),
+    icon_dir: []const u8,
+    raw_name: []const u8,
+    exe_path: []const u8,
+    overwrite: bool,
+) !void {
+    const stem = try sanitizeFileStem(allocator, raw_name);
+    if (stem.len == 0) return;
+    const seen = try emitted.getOrPut(stem);
+    if (seen.found_existing) return;
+
+    const ico_path = try std.fmt.allocPrint(allocator, "{s}\\{s}.ico", .{ icon_dir, stem });
+    if (!overwrite and fileExists(io, ico_path)) {
+        stats.skipped += 1;
+        return;
+    }
+
+    stats.attempted += 1;
+    if (extractIconToIco(io, allocator, exe_path, ico_path)) {
+        stats.written += 1;
+    } else {
+        stats.failed += 1;
+    }
+}
+
+fn sanitizeFileStem(allocator: std.mem.Allocator, raw_name: []const u8) ![]const u8 {
+    var name = std.mem.trim(u8, raw_name, " \t\r\n.");
+    if (std.mem.indexOfScalar(u8, name, '\t')) |idx| {
+        name = std.mem.trim(u8, name[0..idx], " \t\r\n.");
+    }
+    if (name.len == 0) return allocator.dupe(u8, "");
+
+    const out = try allocator.alloc(u8, name.len);
+    for (name, 0..) |c, i| {
+        out[i] = switch (c) {
+            '\\', '/', ':', '*', '?', '"', '<', '>', '|', 0...31 => '_',
+            else => c,
+        };
+    }
+    return std.mem.trim(u8, out, " ._");
+}
+
+fn keyStem(key: []const u8) []const u8 {
+    if (endsWithExe(key)) {
+        return key[0 .. key.len - 4];
+    }
+    return key;
+}
+
+fn extractIconToIco(io: Io, allocator: std.mem.Allocator, exe_path: []const u8, ico_path: []const u8) bool {
+    const exe_w = std.unicode.utf8ToUtf16LeAllocZ(allocator, exe_path) catch return false;
+    var icons = [_]?*anyopaque{null};
+    var icon_ids = [_]u32{0};
+    const extracted = PrivateExtractIconsW(
+        exe_w.ptr,
+        0,
+        @intCast(icon_size),
+        @intCast(icon_size),
+        icons[0..].ptr,
+        icon_ids[0..].ptr,
+        1,
+        0,
+    );
+    if (extracted == 0 or icons[0] == null) return false;
+    defer _ = DestroyIcon(icons[0]);
+
+    saveIconAsIco(io, allocator, icons[0], ico_path) catch return false;
+    return true;
+}
+
+fn saveIconAsIco(io: Io, allocator: std.mem.Allocator, hicon: ?*anyopaque, ico_path: []const u8) !void {
+    const width: u32 = icon_size;
+    const height: u32 = icon_size;
+    const color_row_size: usize = width * 4;
+    const color_size: usize = color_row_size * height;
+    const mask_row_size: usize = ((width + 31) / 32) * 4;
+    const mask_size: usize = mask_row_size * height;
+    const image_size: u32 = @intCast(40 + color_size + mask_size);
+
+    const screen_dc = GetDC(null) orelse return error.IconDcFailed;
+    defer _ = ReleaseDC(null, screen_dc);
+    const mem_dc = CreateCompatibleDC(screen_dc) orelse return error.IconDcFailed;
+    defer _ = DeleteDC(mem_dc);
+
+    var bits: ?*anyopaque = null;
+    var bmi = BITMAPINFO{
+        .bmiHeader = .{
+            .biSize = 40,
+            .biWidth = @intCast(width),
+            .biHeight = @intCast(height),
+            .biPlanes = 1,
+            .biBitCount = 32,
+            .biCompression = 0,
+            .biSizeImage = @intCast(color_size),
+            .biXPelsPerMeter = 0,
+            .biYPelsPerMeter = 0,
+            .biClrUsed = 0,
+            .biClrImportant = 0,
+        },
+        .bmiColors = .{.{ .rgbBlue = 0, .rgbGreen = 0, .rgbRed = 0, .rgbReserved = 0 }},
+    };
+    const dib = CreateDIBSection(mem_dc, &bmi, 0, &bits, null, 0) orelse return error.IconDibFailed;
+    defer _ = DeleteObject(dib);
+    const old_obj = SelectObject(mem_dc, dib);
+    defer _ = SelectObject(mem_dc, old_obj);
+
+    if (DrawIconEx(mem_dc, 0, 0, hicon, @intCast(width), @intCast(height), 0, null, 0x0003) == 0) {
+        return error.IconDrawFailed;
+    }
+
+    const file = try Io.Dir.cwd().createFile(io, ico_path, .{ .truncate = true });
+    defer file.close(io);
+
+    var buffer: [4096]u8 = undefined;
+    var file_writer: Io.File.Writer = .init(file, io, &buffer);
+    const writer = &file_writer.interface;
+
+    try writer.writeInt(u16, 0, .little);
+    try writer.writeInt(u16, 1, .little);
+    try writer.writeInt(u16, 1, .little);
+    try writer.writeByte(@intCast(width));
+    try writer.writeByte(@intCast(height));
+    try writer.writeByte(0);
+    try writer.writeByte(0);
+    try writer.writeInt(u16, 1, .little);
+    try writer.writeInt(u16, 32, .little);
+    try writer.writeInt(u32, image_size, .little);
+    try writer.writeInt(u32, 22, .little);
+
+    try writer.writeInt(u32, 40, .little);
+    try writer.writeInt(i32, @intCast(width), .little);
+    try writer.writeInt(i32, @intCast(height * 2), .little);
+    try writer.writeInt(u16, 1, .little);
+    try writer.writeInt(u16, 32, .little);
+    try writer.writeInt(u32, 0, .little);
+    try writer.writeInt(u32, @intCast(color_size + mask_size), .little);
+    try writer.writeInt(i32, 0, .little);
+    try writer.writeInt(i32, 0, .little);
+    try writer.writeInt(u32, 0, .little);
+    try writer.writeInt(u32, 0, .little);
+
+    const color_bits: [*]const u8 = @ptrCast(bits orelse return error.IconDibFailed);
+    try writer.writeAll(color_bits[0..color_size]);
+    const mask = try allocator.alloc(u8, mask_size);
+    @memset(mask, 0);
+    try writer.writeAll(mask);
+    try writer.flush();
 }
 
 fn startEverything(io: Io, exe_path: []const u8) void {
@@ -627,12 +1061,25 @@ fn fileExists(io: Io, path: []const u8) bool {
     return true;
 }
 
-fn shouldAcceptResolvedPath(path: []const u8) bool {
-    if (isWindowsRootPath(path)) return false;
-    if (containsIgnoreCase(path, ":\\$recycle.bin\\")) return false;
-    if (containsIgnoreCase(path, "\\appdata\\local\\temp\\")) return false;
-    if (containsIgnoreCase(path, "\\appdata\\roaming\\")) return false;
-    return true;
+fn evaluateResolvedPath(path: []const u8) PathDecision {
+    if (!endsWithExe(path)) return .{ .accept = false, .reason = "not_exe" };
+    if (isWindowsRootPath(path)) return .{ .accept = false, .reason = "windows_root" };
+    if (containsIgnoreCase(path, "\\winsxs\\")) return .{ .accept = false, .reason = "winsxs" };
+    if (containsIgnoreCase(path, ":\\$recycle.bin\\")) return .{ .accept = false, .reason = "recycle_bin" };
+    if (containsIgnoreCase(path, "\\appdata\\local\\temp\\")) return .{ .accept = false, .reason = "temp_dir" };
+    if (containsIgnoreCase(path, "\\appdata\\roaming\\")) return .{ .accept = false, .reason = "roaming_dir" };
+    if (containsIgnoreCase(path, "\\installer\\")) return .{ .accept = false, .reason = "installer_cache" };
+
+    var score: i32 = 60;
+    if (containsIgnoreCase(path, "\\program files\\")) score = 100;
+    if (containsIgnoreCase(path, "\\program files (x86)\\")) score = 95;
+    if (containsIgnoreCase(path, "\\steamapps\\common\\")) score = 90;
+    if (containsIgnoreCase(path, "\\scoop\\apps\\")) score = 88;
+    if (containsIgnoreCase(path, "\\appdata\\local\\programs\\")) score = 84;
+    if (containsIgnoreCase(path, "\\appdata\\local\\microsoft\\windowsapps\\")) score = 70;
+    if (path.len >= 2 and std.ascii.toLower(path[0]) != 'c' and path[1] == ':') score += 6;
+    if (containsIgnoreCase(path, "portable")) score += 4;
+    return .{ .accept = true, .reason = "accepted", .score = score };
 }
 
 fn isWindowsRootPath(path: []const u8) bool {
@@ -704,9 +1151,16 @@ fn printRebuildStats(writer: *Io.Writer, stats: RebuildStats) Io.Writer.Error!vo
         \\target_unique={d}
         \\already_cached={d}
         \\missing_before_resolve={d}
+        \\skipped_known_misses={d}
         \\everything_queries={d}
         \\everything_results={d}
+        \\everything_rejected={d}
         \\everything_resolved={d}
+        \\misses_written={d}
+        \\icons_attempted={d}
+        \\icons_written={d}
+        \\icons_skipped={d}
+        \\icons_failed={d}
         \\written_entries={d}
         \\elapsed_ms={d}
         \\
@@ -721,9 +1175,16 @@ fn printRebuildStats(writer: *Io.Writer, stats: RebuildStats) Io.Writer.Error!vo
         stats.target_unique,
         stats.already_cached,
         stats.missing_before_resolve,
+        stats.skipped_known_misses,
         stats.everything_queries,
         stats.everything_results,
+        stats.everything_rejected,
         stats.everything_resolved,
+        stats.misses_written,
+        stats.icons_attempted,
+        stats.icons_written,
+        stats.icons_skipped,
+        stats.icons_failed,
         stats.written_entries,
         stats.elapsed_ms,
     });

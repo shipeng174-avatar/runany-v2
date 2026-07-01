@@ -86,19 +86,55 @@ class IconLoader {
     }
 
     static GetExeIcon(item) {
-        ; 优先使用 BuildCategoryMenu 预解析的路径（避免重复调用 SearchWhere/searchEs）
+        cached := IconLoader.GetCachedExeIcon(item)
+        if cached
+            return cached
+        if ConfigReader.ReadSetting("LiveExeIconFallback", "0") != "1"
+            return ""
+        return IconLoader.GetLiveExeIcon(item)
+    }
+
+    static GetCachedExeIcon(item) {
+        exeName := IconLoader.GetExeNameForIcon(item)
+        if exeName = ""
+            return ""
+        key := PathCache.NormalizeKey(exeName)
+        if key = ""
+            return ""
+        stem := RegExReplace(key, "i)\.exe$")
+
+        libIcon := IconLoader.FindIconInLibrary(stem)
+        if libIcon != "" {
+            parts := StrSplit(libIcon, ",")
+            return { path: parts[1], index: Integer(parts[2]) }
+        }
+
+        exeIconDir := ConfigReader.TransformVar(ConfigReader.ReadSetting("ExeIconDir", A_ScriptDir "\RunIcon\ExeIcon"))
+        icoPath := exeIconDir "\" stem ".ico"
+        if FileExist(icoPath)
+            return { path: icoPath, index: 1 }
+        return ""
+    }
+
+    static GetExeNameForIcon(item) {
+        if item.HasProp("_resolvedPath") && item._resolvedPath != ""
+            return item._resolvedPath
+        exeName := item.RunPath
+        if InStr(exeName, "`t")
+            exeName := StrSplit(exeName, "`t",, 2)[1]
+        if RegExMatch(exeName, "iS)(.*?\.exe)($| .*)", &em)
+            return em[1]
+        return ""
+    }
+
+    static GetLiveExeIcon(item) {
         if item.HasProp("_resolvedPath") && FileExist(item._resolvedPath)
             return { path: item._resolvedPath, index: 0 }
         if RegExMatch(item.RunPath, "i)^(\\\\|[A-Za-z]:\\).*?\.exe", &m) {
             if FileExist(m[0])
                 return { path: m[0], index: 0 }
         }
-        ; 无路径 EXE (如 "notepad.exe") → 通过缓存/解析器查找完整路径
-        exeName := item.RunPath
-        if InStr(exeName, "`t")
-            exeName := StrSplit(exeName, "`t",, 2)[1]
-        if RegExMatch(exeName, "iS)(.*?\.exe)($| .*)", &em)
-            exeName := em[1]
+        exeName := IconLoader.GetExeNameForIcon(item)
         if exeName != "" && !RegExMatch(exeName, "i)^(\\\\|[A-Za-z]:\\)") {
             resolved := PathCache.Get(exeName)
             if resolved != ""
@@ -113,7 +149,8 @@ class IconLoader {
             IconLoader._iconDirCache := Map()
             IconLoader._iconDirsCache := ""
             iconFolders := ConfigReader.ReadSetting("IconFolderPath", "")
-            defDirs := A_ScriptDir "\RunIcon\ExeIcon|" A_ScriptDir "\RunIcon\WebIcon|" A_ScriptDir "\RunIcon\MenuIcon"
+            exeIconDir := ConfigReader.TransformVar(ConfigReader.ReadSetting("ExeIconDir", A_ScriptDir "\RunIcon\ExeIcon"))
+            defDirs := exeIconDir "|" A_ScriptDir "\RunIcon\ExeIcon|" A_ScriptDir "\RunIcon\WebIcon|" A_ScriptDir "\RunIcon\MenuIcon"
             if iconFolders != ""
                 defDirs := iconFolders "|" defDirs
             Loop Parse defDirs, "|", " `t" {
@@ -127,12 +164,18 @@ class IconLoader {
                     nameNoExt := RegExReplace(A_LoopFileName, "\.[^.]+$")
                     if !IconLoader._iconDirCache.Has(nameNoExt)
                         IconLoader._iconDirCache[nameNoExt] := A_LoopFilePath ",1"
+                    lowerName := StrLower(nameNoExt)
+                    if !IconLoader._iconDirCache.Has(lowerName)
+                        IconLoader._iconDirCache[lowerName] := A_LoopFilePath ",1"
                 }
             }
         }
         cleanName := RegExReplace(displayName, "\t.*$", "")
         cleanName := Trim(cleanName)
-        return IconLoader._iconDirCache.Has(cleanName) ? IconLoader._iconDirCache[cleanName] : ""
+        if IconLoader._iconDirCache.Has(cleanName)
+            return IconLoader._iconDirCache[cleanName]
+        cleanLower := StrLower(cleanName)
+        return IconLoader._iconDirCache.Has(cleanLower) ? IconLoader._iconDirCache[cleanLower] : ""
     }
 
     static GetItemIcon(item) {

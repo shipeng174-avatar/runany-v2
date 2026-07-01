@@ -4,6 +4,7 @@
 
 # RunAny runtime/cache
 RunAny_exe_paths.txt
+RunAny_exe_misses.txt
 RunBackup/
 RunAny V1/
 
