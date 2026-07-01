@@ -528,11 +528,7 @@ class SettingsGui {
             failReason := ""
             if v = "" {
                 ; No path at all — check if it can be resolved
-                resolved := ""
-                if g_PathCache.Has(k)
-                    resolved := g_PathCache[k]
-                else if g_PathCache.Has(RegExReplace(k, "i)\.exe$"))
-                    resolved := g_PathCache[RegExReplace(k, "i)\.exe$")]
+                resolved := PathCache.Get(k)
                 if resolved = "" {
                     isFail := true
                     failReason := "未找到路径"

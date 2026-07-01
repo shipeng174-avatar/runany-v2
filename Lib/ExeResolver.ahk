@@ -140,7 +140,6 @@ class ExeResolver {
 
     ; 批量预解析所有无路径 EXE（V1 方式：Everything SDK 逐条搜索，进程内调用无开销）
     static PreResolveAll(parsed) {
-        global g_PathCache, g_PathNotFound
         exeSet := Map()
         for cat in parsed.categories {
             ExeResolver._CollectExes(cat, exeSet)
@@ -152,10 +151,9 @@ class ExeResolver {
 
         uncached := Map()
         for exeName in exeSet {
-            exeNoExt := RegExReplace(exeName, "i)\.exe$")
-            if !g_PathCache.Has(exeName) && !g_PathCache.Has(exeNoExt)
-                && !g_PathNotFound.Has(exeName) && !g_PathNotFound.Has(exeNoExt) {
-                uncached[exeName] := true
+            key := PathCache.NormalizeKey(exeName)
+            if key != "" && !PathCache.Has(key) && !PathCache.IsNotFound(key) {
+                uncached[key] := exeName
             }
         }
         if uncached.Count = 0
@@ -169,7 +167,7 @@ class ExeResolver {
 
         ; Everything SDK is ready here; query only the missing no-path EXE entries.
         regex := ""
-        for exeName in uncached {
+        for key, exeName in uncached {
             escaped := StrReplace(exeName, ".", "\.")
             escaped := StrReplace(escaped, "+", "\+")
             escaped := StrReplace(escaped, "[", "\[")
@@ -189,14 +187,10 @@ class ExeResolver {
             path := EverythingSDK.GetResultFullPathName(idx)
             if path != "" && FileExist(path) && !InStr(FileExist(path), "D") {
                 fName := EverythingSDK.GetResultFileName(idx)
-                if uncached.Has(fName) {
-                    g_PathCache[fName] := path
-                    newCache[fName] := path
-                    noExt := RegExReplace(fName, "i)\.exe$")
-                    if noExt != fName {
-                        g_PathCache[noExt] := path
-                        newCache[noExt] := path
-                    }
+                key := PathCache.NormalizeKey(fName)
+                if key != "" && uncached.Has(key) {
+                    PathCache.Put(key, path)
+                    newCache[key] := path
                 }
             }
         }
@@ -228,40 +222,34 @@ class ExeResolver {
     }
 
     static Find(exeName) {
-        global g_PathCache, g_PathNotFound
-        exeName := RegExReplace(exeName, "i)\.exe$", ".exe")
-        exeNoExt := RegExReplace(exeName, "i)\.exe$")
-
-        if g_PathNotFound.Has(exeName) || g_PathNotFound.Has(exeNoExt)
+        key := PathCache.NormalizeKey(exeName)
+        if key = ""
             return ""
-
-        if g_PathCache.Has(exeName)
-            return g_PathCache[exeName]
-        if g_PathCache.Has(exeNoExt)
-            return g_PathCache[exeNoExt]
 
         if InStr(exeName, ":") || InStr(exeName, "\\")
             return exeName
 
+        if PathCache.IsNotFound(key)
+            return ""
+
+        cached := PathCache.Get(key)
+        if cached != ""
+            return cached
+
         ; 优先 Everything SDK（V1 方式，1.8s 批量），where.exe 作为后备
-        path := ExeResolver.SearchEs(exeName)
+        path := ExeResolver.SearchEs(key)
         if path {
-            g_PathCache[exeName] := path
-            g_PathCache[exeNoExt] := path
-            PathCache.Save(exeName, path)
+            PathCache.Save(key, path)
             return path
         }
 
-        path := ExeResolver.SearchWhere(exeName)
+        path := ExeResolver.SearchWhere(key)
         if path {
-            g_PathCache[exeName] := path
-            g_PathCache[exeNoExt] := path
-            PathCache.Save(exeName, path)
+            PathCache.Save(key, path)
             return path
         }
 
-        g_PathNotFound[exeName] := true
-        g_PathNotFound[exeNoExt] := true
+        PathCache.MarkNotFound(key)
         return ""
     }
 

@@ -94,18 +94,15 @@ class IconLoader {
                 return { path: m[0], index: 0 }
         }
         ; 无路径 EXE (如 "notepad.exe") → 通过缓存/解析器查找完整路径
-        global g_PathCache
         exeName := item.RunPath
         if InStr(exeName, "`t")
             exeName := StrSplit(exeName, "`t",, 2)[1]
         if RegExMatch(exeName, "iS)(.*?\.exe)($| .*)", &em)
             exeName := em[1]
         if exeName != "" && !RegExMatch(exeName, "i)^(\\\\|[A-Za-z]:\\)") {
-            if g_PathCache.Has(exeName)
-                return { path: g_PathCache[exeName], index: 0 }
-            noExt := RegExReplace(exeName, "i)\.exe$")
-            if g_PathCache.Has(noExt)
-                return { path: g_PathCache[noExt], index: 0 }
+            resolved := PathCache.Get(exeName)
+            if resolved != ""
+                return { path: resolved, index: 0 }
         }
         return ""
     }
@@ -306,10 +303,8 @@ class IconLoader {
             if RegExMatch(exePath, "iS)(.*?\.exe)($| .*)", &em)
                 exePath := em[1]
             if exePath = "" || RegExMatch(exePath, "i)^(\\\\|[A-Za-z]:\\)") = 0 {
-                resolved := ""
-                if g_PathCache.Has(exePath)
-                    resolved := g_PathCache[exePath]
-                else
+                resolved := PathCache.Get(exePath)
+                if resolved = ""
                     try resolved := ExeResolver.Find(exePath)
                 if resolved != ""
                     exePath := resolved
@@ -727,11 +722,7 @@ class MenuBuilder {
                     if RegExMatch(exePath, "iS)(.*?\.exe)($| .*)", &em)
                         exePath := em[1]
                     if exePath != "" && !RegExMatch(exePath, "i)^(\\\\|[A-Za-z]:\\)") {
-                        resolved := ""
-                        if g_PathCache.Has(exePath)
-                            resolved := g_PathCache[exePath]
-                        else if g_PathCache.Has(RegExReplace(exePath, "i)\.exe$"))
-                            resolved := g_PathCache[RegExReplace(exePath, "i)\.exe$")]
+                        resolved := PathCache.Get(exePath)
                         if resolved = "" {
                             try resolved := ExeResolver.Find(exePath)
                         }
