@@ -107,8 +107,36 @@ class PathCache {
         }
 
         logPath := A_Temp "\RunAnyCore-cache.log"
+        try FileDelete(logPath)
         cmd .= " --write --log " PathCache._QuoteArg(logPath)
-        try Run(cmd, A_ScriptDir, "Hide")
+        pid := 0
+        try Run(cmd, A_ScriptDir, "Hide", &pid)
+        if pid && ConfigReader.ReadSetting("ZigReloadAfterIconBuild", "1") = "1"
+            SetTimer(() => PathCache._WatchBackgroundRefresh(pid, logPath), -1000)
+    }
+
+    static _WatchBackgroundRefresh(pid, logPath, tries := 0) {
+        if ProcessExist(pid) {
+            if tries < 180
+                SetTimer(() => PathCache._WatchBackgroundRefresh(pid, logPath, tries + 1), -1000)
+            return
+        }
+        if !FileExist(logPath)
+            return
+        content := ""
+        try content := FileRead(logPath)
+        if content = ""
+            return
+        iconsWritten := PathCache._ReadStat(content, "icons_written")
+        if iconsWritten > 0 {
+            try SafeReload()
+        }
+    }
+
+    static _ReadStat(content, key) {
+        if RegExMatch(content, "m)^" key "=(\d+)$", &m)
+            return Integer(m[1])
+        return 0
     }
 
     static _QuoteArg(value) {
