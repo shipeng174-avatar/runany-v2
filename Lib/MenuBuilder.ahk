@@ -723,14 +723,13 @@ class MenuBuilder {
                         exePath := em[1]
                     if exePath != "" && !RegExMatch(exePath, "i)^(\\\\|[A-Za-z]:\\)") {
                         resolved := PathCache.Get(exePath)
-                        if resolved = "" {
-                            try resolved := ExeResolver.Find(exePath)
-                        }
                         if resolved != "" && FileExist(resolved) {
                             item._resolvedPath := resolved
-                        } else {
+                        } else if PathCache.IsNotFound(exePath) {
                             item._resolvedFailed := true
                             mode := ItemMode.FAIL
+                        } else {
+                            item._resolvedPending := true
                         }
                     } else if exePath != "" && !FileExist(exePath) {
                         item._resolvedFailed := true

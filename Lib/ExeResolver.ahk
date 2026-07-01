@@ -140,6 +140,9 @@ class ExeResolver {
 
     ; 批量预解析所有无路径 EXE（V1 方式：Everything SDK 逐条搜索，进程内调用无开销）
     static PreResolveAll(parsed) {
+        if ConfigReader.ReadSetting("ResolveNoPathOnStartup", "0") != "1"
+            return
+
         exeSet := Map()
         for cat in parsed.categories {
             ExeResolver._CollectExes(cat, exeSet)
