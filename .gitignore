@@ -25,6 +25,10 @@ RunIcon/ExeIcon/
 *.swo
 *~
 
+# Zig build output
+tools/RunAnyCore/.zig-cache/
+tools/RunAnyCore/zig-out/
+
 # OS
 Thumbs.db
 Desktop.ini
