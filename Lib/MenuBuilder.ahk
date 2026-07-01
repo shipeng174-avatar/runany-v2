@@ -103,6 +103,9 @@ class IconLoader {
         if exeName != "" && !RegExMatch(exeName, "i)^(\\\\|[A-Za-z]:\\)") {
             if g_PathCache.Has(exeName)
                 return { path: g_PathCache[exeName], index: 0 }
+            noExt := RegExReplace(exeName, "i)\.exe$")
+            if g_PathCache.Has(noExt)
+                return { path: g_PathCache[noExt], index: 0 }
         }
         return ""
     }
@@ -700,31 +703,6 @@ class MenuBuilder {
             mode := item.Mode
             path := item.RunPath
 
-            ; Resolve paths and detect failures for all root types
-            if mode = ItemMode.PROGRAM {
-                exePath := path
-                if InStr(exePath, "`t")
-                    exePath := StrSplit(exePath, "`t",, 2)[1]
-                if RegExMatch(exePath, "iS)(.*?\.exe)($| .*)", &em)
-                    exePath := em[1]
-                if exePath != "" && !RegExMatch(exePath, "i)^(\\\\|[A-Za-z]:\\)") {
-                    resolved := ""
-                    if g_PathCache.Has(exePath)
-                        resolved := g_PathCache[exePath]
-                    else if g_PathCache.Has(RegExReplace(exePath, "i)\.exe$"))
-                        resolved := g_PathCache[RegExReplace(exePath, "i)\.exe$")]
-                    if resolved = "" {
-                        try resolved := ExeResolver.Find(exePath)
-                    }
-                    if resolved != "" && FileExist(resolved)
-                        item._resolvedPath := resolved
-                    if resolved = "" || !FileExist(resolved)
-                        mode := ItemMode.FAIL
-                } else if exePath != "" && !FileExist(exePath) {
-                    mode := ItemMode.FAIL
-                }
-            }
-
             if rootType = "text" && hasTextCats {
                 if !InStr(path, "%getZz%") && !InStr(path, "%s")
                     continue
@@ -733,6 +711,41 @@ class MenuBuilder {
             if rootType = "file" && hasFileCats {
                 if !InStr(path, "%getZz%") && !InStr(path, "%s") && mode != ItemMode.PROGRAM && mode != ItemMode.FAIL
                     continue
+            }
+
+            ; Resolve paths and detect failures for all root types
+            if mode = ItemMode.PROGRAM {
+                if item.HasProp("_resolvedChecked") {
+                    if item.HasProp("_resolvedFailed") && item._resolvedFailed
+                        mode := ItemMode.FAIL
+                } else {
+                    item._resolvedChecked := true
+                    item._resolvedFailed := false
+                    exePath := path
+                    if InStr(exePath, "`t")
+                        exePath := StrSplit(exePath, "`t",, 2)[1]
+                    if RegExMatch(exePath, "iS)(.*?\.exe)($| .*)", &em)
+                        exePath := em[1]
+                    if exePath != "" && !RegExMatch(exePath, "i)^(\\\\|[A-Za-z]:\\)") {
+                        resolved := ""
+                        if g_PathCache.Has(exePath)
+                            resolved := g_PathCache[exePath]
+                        else if g_PathCache.Has(RegExReplace(exePath, "i)\.exe$"))
+                            resolved := g_PathCache[RegExReplace(exePath, "i)\.exe$")]
+                        if resolved = "" {
+                            try resolved := ExeResolver.Find(exePath)
+                        }
+                        if resolved != "" && FileExist(resolved) {
+                            item._resolvedPath := resolved
+                        } else {
+                            item._resolvedFailed := true
+                            mode := ItemMode.FAIL
+                        }
+                    } else if exePath != "" && !FileExist(exePath) {
+                        item._resolvedFailed := true
+                        mode := ItemMode.FAIL
+                    }
+                }
             }
 
             ; Apply hiding settings for all roots (consistent with V1)

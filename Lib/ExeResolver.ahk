@@ -145,84 +145,98 @@ class ExeResolver {
         for cat in parsed.categories {
             ExeResolver._CollectExes(cat, exeSet)
         }
+        if parsed.HasProp("rootItems")
+            ExeResolver._CollectItemExes(parsed.rootItems, exeSet)
         if exeSet.Count = 0
             return
 
-        if EverythingSDK.initDone {
-            ; 过滤掉已在缓存中的 EXE（二次启动全命中 → 直接跳过 Everything 查询）
-            uncached := Map()
-            for exeName in exeSet {
-                if !g_PathCache.Has(exeName) && !g_PathNotFound.Has(exeName)
-                    uncached[exeName] := true
+        uncached := Map()
+        for exeName in exeSet {
+            exeNoExt := RegExReplace(exeName, "i)\.exe$")
+            if !g_PathCache.Has(exeName) && !g_PathCache.Has(exeNoExt)
+                && !g_PathNotFound.Has(exeName) && !g_PathNotFound.Has(exeNoExt) {
+                uncached[exeName] := true
             }
-            if uncached.Count = 0
-                return
+        }
+        if uncached.Count = 0
+            return
 
-            ; V1 方式：构建正则 `^exe1\.exe$|^exe2\.exe$|...` 一次查询全部
-            regex := ""
-            for exeName in uncached {
-                escaped := StrReplace(exeName, ".", "\.")
-                escaped := StrReplace(escaped, "+", "\+")
-                escaped := StrReplace(escaped, "[", "\[")
-                escaped := StrReplace(escaped, "^", "\^")
-                escaped := StrReplace(escaped, "$", "\$")
-                if regex != ""
-                    regex .= "|"
-                regex .= "^" escaped "$"
-            }
-            EverythingSDK.SetRegex(true)
-            EverythingSDK.SetSearch(regex)
-            EverythingSDK.Query()
-            numResults := EverythingSDK.GetNumFileResults()
-            newCache := Map()
-            Loop numResults {
-                idx := A_Index - 1
-                path := EverythingSDK.GetResultFullPathName(idx)
-                if path != "" && FileExist(path) && !InStr(FileExist(path), "D") {
-                    fName := EverythingSDK.GetResultFileName(idx)
-                    if uncached.Has(fName) {
-                        g_PathCache[fName] := path
-                        newCache[fName] := path
-                        noExt := RegExReplace(fName, "i)\.exe$")
-                        if noExt != fName {
-                            g_PathCache[noExt] := path
-                            newCache[noExt] := path
-                        }
+        ExeResolver.StartEverything()
+        if !EverythingSDK.initDone
+            ExeResolver.InitSDK()
+        if !EverythingSDK.initDone
+            return
+
+        ; Everything SDK is ready here; query only the missing no-path EXE entries.
+        regex := ""
+        for exeName in uncached {
+            escaped := StrReplace(exeName, ".", "\.")
+            escaped := StrReplace(escaped, "+", "\+")
+            escaped := StrReplace(escaped, "[", "\[")
+            escaped := StrReplace(escaped, "^", "\^")
+            escaped := StrReplace(escaped, "$", "\$")
+            if regex != ""
+                regex .= "|"
+            regex .= "^" escaped "$"
+        }
+        EverythingSDK.SetRegex(true)
+        EverythingSDK.SetSearch(regex)
+        EverythingSDK.Query()
+        numResults := EverythingSDK.GetNumFileResults()
+        newCache := Map()
+        Loop numResults {
+            idx := A_Index - 1
+            path := EverythingSDK.GetResultFullPathName(idx)
+            if path != "" && FileExist(path) && !InStr(FileExist(path), "D") {
+                fName := EverythingSDK.GetResultFileName(idx)
+                if uncached.Has(fName) {
+                    g_PathCache[fName] := path
+                    newCache[fName] := path
+                    noExt := RegExReplace(fName, "i)\.exe$")
+                    if noExt != fName {
+                        g_PathCache[noExt] := path
+                        newCache[noExt] := path
                     }
                 }
             }
-            PathCache.BatchSave(newCache)
-            for exeName in uncached {
-                if !g_PathCache.Has(exeName)
-                    g_PathNotFound[exeName] := true
-            }
-            ; 持久化未找到的 EXE，避免每次重启重复查询
-            notFoundBuf := ""
-            for exeName in uncached {
-                if !g_PathCache.Has(exeName)
-                    notFoundBuf .= exeName "=*`n"
-            }
-            if notFoundBuf != ""
-                try FileAppend(notFoundBuf, PathCache.CACHE_FILE)
-            EverythingSDK.SetRegex(false)
         }
+        PathCache.BatchSave(newCache)
+        for exeName in uncached {
+            exeNoExt := RegExReplace(exeName, "i)\.exe$")
+            if !g_PathCache.Has(exeName) && !g_PathCache.Has(exeNoExt) {
+                g_PathNotFound[exeName] := true
+                g_PathNotFound[exeNoExt] := true
+            }
+        }
+        notFoundBuf := ""
+        for exeName in uncached {
+            exeNoExt := RegExReplace(exeName, "i)\.exe$")
+            if !g_PathCache.Has(exeName) && !g_PathCache.Has(exeNoExt)
+                notFoundBuf .= exeName "=*`n"
+        }
+        if notFoundBuf != ""
+            try FileAppend(notFoundBuf, PathCache.CACHE_FILE)
+        EverythingSDK.SetRegex(false)
     }
 
     static _CollectExes(cat, exeSet) {
-        for item in cat.Items {
-            if item.Mode = ItemMode.PROGRAM {
-                exePath := item.RunPath
-                if InStr(exePath, "`t")
-                    exePath := StrSplit(exePath, "`t",, 2)[1]
-                if RegExMatch(exePath, "iS)(.*?\.exe)($| .*)", &em)
-                    exePath := em[1]
-                if exePath != "" && !RegExMatch(exePath, "i)^(\\\\|[A-Za-z]:\\)") {
-                    exeSet[exePath] := true
-                }
-            }
-        }
+        ExeResolver._CollectItemExes(cat.Items, exeSet)
         for child in cat.Children {
             ExeResolver._CollectExes(child, exeSet)
+        }
+    }
+
+    static _CollectItemExes(items, exeSet) {
+        for item in items {
+            if item.Mode != ItemMode.PROGRAM
+                continue
+            exePath := item.RunPath
+            if InStr(exePath, "`t")
+                exePath := StrSplit(exePath, "`t",, 2)[1]
+            if RegExMatch(exePath, "iS)(.*?\.exe)($| .*)", &em)
+                exePath := em[1]
+            if exePath != "" && !RegExMatch(exePath, "i)^(\\\\|[A-Za-z]:\\)")
+                exeSet[exePath] := true
         }
     }
 
@@ -309,6 +323,9 @@ class ExeResolver {
     }
 
     static SearchEs(exeName) {
+        if ConfigReader.ReadSetting("EvNo", "0") = "1"
+            return ""
+
         if !ProcessExist("Everything.exe")
             ExeResolver.StartEverything()
 

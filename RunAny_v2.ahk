@@ -905,7 +905,6 @@ Init() {
 
     ExeResolver.Init()
     PathCache.Init()
-    ExeResolver.StartEverything()
 
     g_RecentMax := Integer(ConfigReader.ReadSetting("RecentMax", "5"))
     g_EvShowExt := ConfigReader.ReadSetting("EvShowExt", "1") = "1"
