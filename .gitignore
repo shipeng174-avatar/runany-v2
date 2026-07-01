@@ -1,0 +1,36 @@
+# AutoHotkey
+*.exe
+*.dll
+
+# RunAny runtime/cache
+RunAny_exe_paths.txt
+RunBackup/
+RunAny V1/
+
+# Everything search
+Everything/Everything.db
+Everything/Everything.ini
+Everything/Everything_*.db
+Everything/Run History.csv
+
+# Icon cache
+RunIcon/MenuIcon/
+RunIcon/WebIcon/
+RunIcon/ExeIcon/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Config tool files
+.claude/
+.opencode/
+.aider*
