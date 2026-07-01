@@ -1,6 +1,8 @@
 # AutoHotkey
 *.exe
 *.dll
+!Everything3_x64.dll
+!Everything3_x86.dll
 
 # RunAny runtime/cache
 RunAny_exe_paths.txt

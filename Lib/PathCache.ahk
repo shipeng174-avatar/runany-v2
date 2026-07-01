@@ -78,10 +78,22 @@ class PathCache {
             cmd .= " --menu " PathCache._QuoteArg(INI2_PATH)
 
         if ConfigReader.ReadSetting("EvNo", "0") != "1" {
+            sdk3Name := A_PtrSize = 8 ? "Everything3_x64.dll" : "Everything3_x86.dll"
+            sdk3Path := A_ScriptDir "\" sdk3Name
+            if !FileExist(sdk3Path) && FileExist(A_ScriptDir "\Everything\" sdk3Name)
+                sdk3Path := A_ScriptDir "\Everything\" sdk3Name
+            if FileExist(sdk3Path) {
+                cmd .= " --everything3-dll " PathCache._QuoteArg(sdk3Path)
+                evInstance := ConfigReader.ReadSetting("EverythingInstanceName", "")
+                if evInstance != ""
+                    cmd .= " --everything-instance " PathCache._QuoteArg(evInstance)
+            }
             dllPath := A_PtrSize = 8 ? A_ScriptDir "\Everything64.dll" : A_ScriptDir "\Everything.dll"
             if FileExist(dllPath) {
                 cmd .= " --everything-dll " PathCache._QuoteArg(dllPath)
-                evExe := A_ScriptDir "\Everything\Everything.exe"
+                evExe := ConfigReader.TransformVar(ConfigReader.ReadSetting("EvPath", ""))
+                if evExe = ""
+                    evExe := A_ScriptDir "\Everything\Everything.exe"
                 if FileExist(evExe) {
                     cmd .= " --everything-exe " PathCache._QuoteArg(evExe)
                 }

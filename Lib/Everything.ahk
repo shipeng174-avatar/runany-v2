@@ -56,7 +56,7 @@ class EverythingSearch {
         DetectHiddenWindows(true)
         if WinExist("ahk_class EVERYTHING") {
             if evSearch {
-                Run(ExeResolver.EvExePath ' -search "' evSearch '"' evShowFolderSpace)
+                Run('"' ExeResolver.EvExePath '"' ExeResolver.GetInstanceArgs() ' -search "' evSearch '"' evShowFolderSpace)
             } else {
                 if !WinActive("ahk_class EVERYTHING")
                     WinActivate("ahk_class EVERYTHING")
@@ -66,7 +66,7 @@ class EverythingSearch {
         } else {
             ExeResolver.StartEverything()
             if evSearch {
-                Run(ExeResolver.EvExePath ' -search "' evSearch '"' evShowFolderSpace)
+                Run('"' ExeResolver.EvExePath '"' ExeResolver.GetInstanceArgs() ' -search "' evSearch '"' evShowFolderSpace)
             }
         }
         DetectHiddenWindows(false)

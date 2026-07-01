@@ -685,9 +685,11 @@ class SettingsGui {
         SettingsGui.CB(g, "EvShowExt", "搜索带文件后缀", "x+27")
         SettingsGui.CB(g, "EvShowFolder", "搜索选中文件夹内部", "x+5")
 
-        g.AddGroupBox("xm-10 y+25 w660 h60", "Everything安装路径（支持菜单变量和相对路径 \\..\\ 代表上一级目录）")
+        g.AddGroupBox("xm-10 y+25 w660 h95", "Everything安装路径（支持菜单变量和相对路径 \\..\\ 代表上一级目录）")
         g.AddButton("xm yp+20 w50", "选择").OnEvent("Click", (*) => SettingsGui.BrowseFile("EvPath", "Everything.exe"))
         SettingsGui.ED(g, "EvPath", "", "xm+60 yp+2 w580 r1")
+        g.AddText("xm y+8", "Everything instance name (1.5 alpha: 1.5a; beta/stable: empty)")
+        SettingsGui.ED(g, "EverythingInstanceName", "", "xm y+5 w240 r1")
 
         g.AddGroupBox("xm-10 y+25 w660 h450", "RunAny调用Everything搜索参数（搜索结果可在RunAny无路径运行，Everything异常请尝试重建索引）")
         evDemand := ConfigReader.ReadSetting("EvDemandSearch", "1") = "1"
@@ -1201,7 +1203,7 @@ class SettingsGui {
             "MenuCtrlRightKey","MenuShiftRightKey","MenuXButton1Key","MenuXButton2Key","MenuMButtonKey",
             "TreeHotKey1","TreeWinKey1","TreeHotKey2","TreeWinKey2",
             "TreeIniHotKey1","TreeIniWinKey1","TreeIniHotKey2","TreeIniWinKey2",
-            "EvKey","EvWinKey","EvPath","EvAutoClose","EvShowExt","EvShowFolder","EvExeVerNew","EvExeMTimeNew",
+            "EvKey","EvWinKey","EvPath","EverythingInstanceName","EvAutoClose","EvShowExt","EvShowFolder","EvExeVerNew","EvExeMTimeNew",
             "EvDemandSearch","EvCommand",
             "OneKey","OneWinKey","OneKeyUrl","OneKeyMenu",
             "RunATrayHotKey","RunATrayWinKey","RunASetHotKey","RunASetWinKey",

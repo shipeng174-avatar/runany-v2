@@ -102,6 +102,8 @@ const RebuildOptions = struct {
     write_back: bool = false,
     force: bool = false,
     menu_paths: std.ArrayList([]const u8) = .empty,
+    everything3_dll: ?[]const u8 = null,
+    everything_instance: ?[]const u8 = null,
     everything_dll: ?[]const u8 = null,
     everything_exe: ?[]const u8 = null,
     miss_path: ?[]const u8 = null,
@@ -233,6 +235,14 @@ pub fn main(init: std.process.Init) !void {
                 i += 1;
                 if (i >= args.len) return error.InvalidArguments;
                 options.everything_dll = args[i];
+            } else if (std.mem.eql(u8, arg, "--everything3-dll")) {
+                i += 1;
+                if (i >= args.len) return error.InvalidArguments;
+                options.everything3_dll = args[i];
+            } else if (std.mem.eql(u8, arg, "--everything-instance")) {
+                i += 1;
+                if (i >= args.len) return error.InvalidArguments;
+                options.everything_instance = args[i];
             } else if (std.mem.eql(u8, arg, "--everything-exe")) {
                 i += 1;
                 if (i >= args.len) return error.InvalidArguments;
@@ -290,7 +300,7 @@ fn usage(writer: *Io.Writer) Io.Writer.Error!void {
     try writer.writeAll(
         \\RunAnyCore cache stats <RunAny_exe_paths.txt>
         \\RunAnyCore cache compact <RunAny_exe_paths.txt> [--write]
-        \\RunAnyCore cache rebuild <RunAny_exe_paths.txt> --menu <RunAny.ini> [--menu <RunAny2.ini>] [--everything-dll <Everything64.dll>] [--everything-exe <Everything.exe>] [--miss <RunAny_exe_misses.txt>] [--icon-dir <RunIcon\ExeIcon>] [--force] [--write] [--log <file>]
+        \\RunAnyCore cache rebuild <RunAny_exe_paths.txt> --menu <RunAny.ini> [--menu <RunAny2.ini>] [--everything3-dll <Everything3_x64.dll>] [--everything-instance <name>] [--everything-dll <Everything64.dll>] [--everything-exe <Everything.exe>] [--miss <RunAny_exe_misses.txt>] [--icon-dir <RunIcon\ExeIcon>] [--force] [--write] [--log <file>]
         \\
     );
 }
@@ -326,8 +336,8 @@ fn rebuildCache(io: Io, allocator: std.mem.Allocator, options: RebuildOptions) !
 
     var resolved: ResolveStats = .{};
     if (missing.items.len > 0) {
-        if (options.everything_dll) |dll_path| {
-            resolved = resolveMissingWithEverything(io, allocator, &cache, &misses, missing.items, dll_path, options.everything_exe);
+        if (options.everything3_dll != null or options.everything_dll != null) {
+            resolved = resolveMissingWithEverything(io, allocator, &cache, &misses, missing.items, options.everything3_dll, options.everything_dll, options.everything_exe, options.everything_instance);
         } else {
             for (missing.items) |key| {
                 try setMissReason(allocator, &misses, key, "no_everything_dll");
@@ -631,13 +641,124 @@ fn resolveMissingWithEverything(
     cache: *CacheData,
     misses: *MissData,
     missing: []const []const u8,
-    dll_path: []const u8,
+    sdk3_dll_path: ?[]const u8,
+    sdk1_dll_path: ?[]const u8,
     exe_path: ?[]const u8,
+    instance: ?[]const u8,
 ) ResolveStats {
     if (exe_path) |path| {
-        startEverything(io, path);
+        startEverything(io, path, instance);
     }
 
+    if (sdk3_dll_path) |dll_path| {
+        const stats = resolveMissingWithEverything3(io, allocator, cache, misses, missing, dll_path, instance);
+        if (stats.queries > 0) return stats;
+    }
+
+    if (sdk1_dll_path) |dll_path| {
+        return resolveMissingWithEverything1(io, allocator, cache, misses, missing, dll_path);
+    }
+
+    return .{};
+}
+
+fn resolveMissingWithEverything3(
+    io: Io,
+    allocator: std.mem.Allocator,
+    cache: *CacheData,
+    misses: *MissData,
+    missing: []const []const u8,
+    dll_path: []const u8,
+    instance: ?[]const u8,
+) ResolveStats {
+    var sdk = EverythingSdk3.open(allocator, dll_path, instance) catch return .{};
+    defer sdk.close();
+
+    var stats: ResolveStats = .{};
+    var offset: usize = 0;
+    while (offset < missing.len) {
+        const end = @min(offset + everything_chunk_size, missing.len);
+        const chunk = missing[offset..end];
+        const regex = buildEverythingRegex(allocator, chunk) catch break;
+        const regex_w = std.unicode.utf8ToUtf16LeAllocZ(allocator, regex) catch break;
+
+        const search_state = sdk.create_search_state() orelse break;
+        defer _ = sdk.destroy_search_state(search_state);
+        _ = sdk.set_search_regex(search_state, 1);
+        _ = sdk.set_search_match_whole_words(search_state, 0);
+        _ = sdk.set_search_text(search_state, regex_w.ptr);
+
+        stats.queries += 1;
+        const result_list = sdk.search(sdk.client, search_state) orelse {
+            for (chunk) |key| {
+                setMissReason(allocator, misses, key, "everything3_query_failed") catch {};
+            }
+            offset = end;
+            continue;
+        };
+        defer _ = sdk.destroy_result_list(result_list);
+
+        var candidates = std.StringHashMap(Candidate).init(allocator);
+        var seen = std.StringHashMap(void).init(allocator);
+        var rejected_reasons = std.StringHashMap([]const u8).init(allocator);
+        const result_count = sdk.get_result_list_viewport_count(result_list);
+        stats.results += result_count;
+        var i: usize = 0;
+        while (i < result_count) : (i += 1) {
+            var buf: [everything_path_chars]u16 = undefined;
+            const written = sdk.get_result_full_path(result_list, i, &buf, buf.len);
+            if (written == 0) continue;
+            const len = std.mem.indexOfScalar(u16, buf[0..], 0) orelse @min(written, buf.len);
+            const full_path = std.unicode.utf16LeToUtf8Alloc(allocator, buf[0..len]) catch continue;
+            const key = normalizeKey(allocator, full_path) catch continue orelse continue;
+            if (!containsKey(chunk, key)) continue;
+
+            _ = seen.getOrPut(key) catch {};
+            if (!fileExists(io, full_path)) {
+                stats.rejected += 1;
+                putRejectedReason(&rejected_reasons, key, "missing_path") catch {};
+                continue;
+            }
+            const decision = evaluateResolvedPath(full_path);
+            if (!decision.accept) {
+                stats.rejected += 1;
+                putRejectedReason(&rejected_reasons, key, decision.reason) catch {};
+                continue;
+            }
+
+            const candidate = candidates.getOrPut(key) catch continue;
+            if (!candidate.found_existing or decision.score > candidate.value_ptr.score or
+                (decision.score == candidate.value_ptr.score and full_path.len < candidate.value_ptr.path.len))
+            {
+                candidate.value_ptr.* = .{ .path = full_path, .score = decision.score };
+            }
+        }
+
+        for (chunk) |key| {
+            if (candidates.get(key)) |candidate| {
+                if (putCacheValue(allocator, cache, key, candidate.path) catch false) {
+                    stats.resolved += 1;
+                }
+            } else if (seen.contains(key)) {
+                const reason = rejected_reasons.get(key) orelse "filtered_result";
+                setMissReason(allocator, misses, key, reason) catch {};
+            } else {
+                setMissReason(allocator, misses, key, "not_found") catch {};
+            }
+        }
+        offset = end;
+    }
+    return stats;
+}
+
+fn resolveMissingWithEverything1(
+    io: Io,
+    allocator: std.mem.Allocator,
+    cache: *CacheData,
+    misses: *MissData,
+    missing: []const []const u8,
+    dll_path: []const u8,
+) ResolveStats {
     var sdk = EverythingSdk.open(allocator, dll_path) catch return .{};
     defer sdk.close();
 
@@ -897,11 +1018,25 @@ fn saveIconAsIco(io: Io, allocator: std.mem.Allocator, hicon: ?*anyopaque, ico_p
     try writer.flush();
 }
 
-fn startEverything(io: Io, exe_path: []const u8) void {
+fn startEverything(io: Io, exe_path: []const u8, instance: ?[]const u8) void {
     if (!fileExists(io, exe_path)) return;
-    const argv = [_][]const u8{ exe_path, "-startup" };
-    const child = std.process.spawn(io, .{
-        .argv = &argv,
+    const child = if (instance) |name| blk: {
+        if (name.len == 0) break :blk std.process.spawn(io, .{
+            .argv = &[_][]const u8{ exe_path, "-startup" },
+            .stdin = .ignore,
+            .stdout = .ignore,
+            .stderr = .ignore,
+            .create_no_window = true,
+        }) catch return;
+        break :blk std.process.spawn(io, .{
+            .argv = &[_][]const u8{ exe_path, "-startup", "-instance", name },
+            .stdin = .ignore,
+            .stdout = .ignore,
+            .stderr = .ignore,
+            .create_no_window = true,
+        }) catch return;
+    } else std.process.spawn(io, .{
+        .argv = &[_][]const u8{ exe_path, "-startup" },
         .stdin = .ignore,
         .stdout = .ignore,
         .stderr = .ignore,
@@ -916,6 +1051,68 @@ const SetBoolFn = *const fn (c_int) callconv(.winapi) void;
 const QueryWFn = *const fn (c_int) callconv(.winapi) c_int;
 const GetNumFileResultsFn = *const fn () callconv(.winapi) u32;
 const GetResultFullPathNameWFn = *const fn (u32, [*]u16, u32) callconv(.winapi) u32;
+
+const Everything3ConnectWFn = *const fn ([*:0]const u16) callconv(.winapi) ?*anyopaque;
+const Everything3DestroyClientFn = *const fn (*anyopaque) callconv(.winapi) c_int;
+const Everything3CreateSearchStateFn = *const fn () callconv(.winapi) ?*anyopaque;
+const Everything3DestroySearchStateFn = *const fn (*anyopaque) callconv(.winapi) c_int;
+const Everything3SetSearchTextWFn = *const fn (*anyopaque, [*:0]const u16) callconv(.winapi) c_int;
+const Everything3SetSearchBoolFn = *const fn (*anyopaque, c_int) callconv(.winapi) c_int;
+const Everything3SearchFn = *const fn (*anyopaque, *anyopaque) callconv(.winapi) ?*anyopaque;
+const Everything3DestroyResultListFn = *const fn (*anyopaque) callconv(.winapi) c_int;
+const Everything3GetResultListViewportCountFn = *const fn (*anyopaque) callconv(.winapi) usize;
+const Everything3GetResultFullPathNameWFn = *const fn (*anyopaque, usize, [*]u16, usize) callconv(.winapi) usize;
+
+const EverythingSdk3 = struct {
+    handle: *anyopaque,
+    client: *anyopaque,
+    destroy_client: Everything3DestroyClientFn,
+    create_search_state: Everything3CreateSearchStateFn,
+    destroy_search_state: Everything3DestroySearchStateFn,
+    set_search_text: Everything3SetSearchTextWFn,
+    set_search_regex: Everything3SetSearchBoolFn,
+    set_search_match_whole_words: Everything3SetSearchBoolFn,
+    search: Everything3SearchFn,
+    destroy_result_list: Everything3DestroyResultListFn,
+    get_result_list_viewport_count: Everything3GetResultListViewportCountFn,
+    get_result_full_path: Everything3GetResultFullPathNameWFn,
+
+    fn open(allocator: std.mem.Allocator, path: []const u8, instance: ?[]const u8) !EverythingSdk3 {
+        const wide_path = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
+        const handle = LoadLibraryW(wide_path.ptr) orelse return error.OpenEverythingDllFailed;
+        const connect = try lookupSymbol(Everything3ConnectWFn, handle, "Everything3_ConnectW");
+        const instance_name = instance orelse "";
+        const instance_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, instance_name);
+        var client = connect(instance_w.ptr);
+        if (client == null and instance_name.len == 0) {
+            const alpha_instance_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, "1.5a");
+            client = connect(alpha_instance_w.ptr);
+        }
+        const opened_client = client orelse {
+            _ = FreeLibrary(handle);
+            return error.OpenEverythingClientFailed;
+        };
+        return .{
+            .handle = handle,
+            .client = opened_client,
+            .destroy_client = try lookupSymbol(Everything3DestroyClientFn, handle, "Everything3_DestroyClient"),
+            .create_search_state = try lookupSymbol(Everything3CreateSearchStateFn, handle, "Everything3_CreateSearchState"),
+            .destroy_search_state = try lookupSymbol(Everything3DestroySearchStateFn, handle, "Everything3_DestroySearchState"),
+            .set_search_text = try lookupSymbol(Everything3SetSearchTextWFn, handle, "Everything3_SetSearchTextW"),
+            .set_search_regex = try lookupSymbol(Everything3SetSearchBoolFn, handle, "Everything3_SetSearchRegex"),
+            .set_search_match_whole_words = try lookupSymbol(Everything3SetSearchBoolFn, handle, "Everything3_SetSearchMatchWholeWords"),
+            .search = try lookupSymbol(Everything3SearchFn, handle, "Everything3_Search"),
+            .destroy_result_list = try lookupSymbol(Everything3DestroyResultListFn, handle, "Everything3_DestroyResultList"),
+            .get_result_list_viewport_count = try lookupSymbol(Everything3GetResultListViewportCountFn, handle, "Everything3_GetResultListViewportCount"),
+            .get_result_full_path = try lookupSymbol(Everything3GetResultFullPathNameWFn, handle, "Everything3_GetResultFullPathNameW"),
+        };
+    }
+
+    fn close(self: *EverythingSdk3) void {
+        _ = self.destroy_client(self.client);
+        _ = FreeLibrary(self.handle);
+    }
+};
 
 const EverythingSdk = struct {
     handle: *anyopaque,
