@@ -284,7 +284,7 @@ class ExeResolver {
     static StartEverything() {
         if ExeResolver.EvExePath = ""
             return
-        evPid := ExeResolver.FindEverythingProcess()
+        evPid := ExeResolver.FindEverythingProcess(true)
         if evPid {
             if A_IsAdmin && EverythingSDK.sdkVersion != 3 {
                 evIsAdmin := false
@@ -303,16 +303,92 @@ class ExeResolver {
             }
             return
         }
+        ExeResolver.StopMismatchedEverythingProcess()
         adminArg := A_IsAdmin ? " -admin" : ""
         try Run('"' ExeResolver.EvExePath '" -startup' ExeResolver.GetInstanceArgs() adminArg,, "Hide")
         Sleep(500)
+        EverythingSDK.Free()
+        ExeResolver.InitSDK()
     }
 
-    static FindEverythingProcess() {
-        pid := ProcessExist("Everything64.exe")
-        if pid
-            return pid
-        return ProcessExist("Everything.exe")
+    static FindEverythingProcess(matchConfiguredPath := false) {
+        targetPath := matchConfiguredPath ? ExeResolver.NormalizePath(ExeResolver.EvExePath) : ""
+        try {
+            for proc in ComObjGet("winmgmts:").ExecQuery("SELECT ProcessId,ExecutablePath FROM Win32_Process WHERE Name='Everything64.exe' OR Name='Everything.exe'") {
+                pid := Integer(proc.ProcessId)
+                if !matchConfiguredPath
+                    return pid
+                procPath := ""
+                try procPath := proc.ExecutablePath
+                if targetPath != "" && ExeResolver.NormalizePath(procPath) = targetPath
+                    return pid
+            }
+        }
+        for name in ["Everything64.exe", "Everything.exe"] {
+            pid := ProcessExist(name)
+            if !pid
+                continue
+            if !matchConfiguredPath
+                return pid
+            try {
+                if targetPath != "" && ExeResolver.NormalizePath(ProcessGetPath(pid)) = targetPath
+                    return pid
+            }
+        }
+        return 0
+    }
+
+    static FindEverythingWindow(matchConfiguredPath := true) {
+        for hwnd in WinGetList("ahk_class EVERYTHING") {
+            try {
+                pid := WinGetPID("ahk_id " hwnd)
+                if !matchConfiguredPath || ExeResolver.IsConfiguredEverythingPid(pid)
+                    return hwnd
+            }
+        }
+        return 0
+    }
+
+    static IsConfiguredEverythingPid(pid) {
+        targetPath := ExeResolver.NormalizePath(ExeResolver.EvExePath)
+        if !pid || targetPath = ""
+            return false
+        try return ExeResolver.NormalizePath(ProcessGetPath(pid)) = targetPath
+        return false
+    }
+
+    static StopMismatchedEverythingProcess() {
+        targetPath := ExeResolver.NormalizePath(ExeResolver.EvExePath)
+        if targetPath = ""
+            return
+        try {
+            for proc in ComObjGet("winmgmts:").ExecQuery("SELECT ProcessId,ExecutablePath FROM Win32_Process WHERE Name='Everything64.exe' OR Name='Everything.exe'") {
+                procPath := ""
+                try procPath := proc.ExecutablePath
+                if procPath = "" || ExeResolver.NormalizePath(procPath) = targetPath
+                    continue
+                try Run('"' procPath '" -exit' ExeResolver.GetInstanceArgs(),, "Hide")
+                Sleep(500)
+                return
+            }
+        }
+        pid := ExeResolver.FindEverythingProcess(false)
+        if !pid
+            return
+        try {
+            procPath := ProcessGetPath(pid)
+            if procPath != "" && ExeResolver.NormalizePath(procPath) != targetPath {
+                try Run('"' procPath '" -exit' ExeResolver.GetInstanceArgs(),, "Hide")
+                Sleep(500)
+            }
+        }
+    }
+
+    static NormalizePath(path) {
+        path := Trim(path, " `t`r`n`"")
+        if path = ""
+            return ""
+        return StrLower(StrReplace(path, "/", "\"))
     }
 
     static GetInstanceArgs() {
@@ -492,7 +568,7 @@ class ExeResolver {
         if ConfigReader.ReadSetting("EvNo", "0") = "1"
             return ""
 
-        if !ExeResolver.FindEverythingProcess() {
+        if !ExeResolver.FindEverythingProcess(true) {
             ExeResolver.StartEverything()
             EverythingSDK.Free()
             ExeResolver.InitSDK()

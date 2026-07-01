@@ -88,15 +88,14 @@ class PathCache {
                 if evInstance != ""
                     cmd .= " --everything-instance " PathCache._QuoteArg(evInstance)
             }
+            evExe := ConfigReader.TransformVar(ConfigReader.ReadSetting("EvPath", ""))
+            if evExe = ""
+                evExe := A_ScriptDir "\Everything\Everything.exe"
+            if FileExist(evExe)
+                cmd .= " --everything-exe " PathCache._QuoteArg(evExe)
             dllPath := A_PtrSize = 8 ? A_ScriptDir "\Everything64.dll" : A_ScriptDir "\Everything.dll"
             if FileExist(dllPath) {
                 cmd .= " --everything-dll " PathCache._QuoteArg(dllPath)
-                evExe := ConfigReader.TransformVar(ConfigReader.ReadSetting("EvPath", ""))
-                if evExe = ""
-                    evExe := A_ScriptDir "\Everything\Everything.exe"
-                if FileExist(evExe) {
-                    cmd .= " --everything-exe " PathCache._QuoteArg(evExe)
-                }
             }
         }
 

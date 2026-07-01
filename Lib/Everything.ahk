@@ -54,20 +54,18 @@ class EverythingSearch {
         }
 
         DetectHiddenWindows(true)
-        if WinExist("ahk_class EVERYTHING") {
-            if evSearch {
-                Run('"' ExeResolver.EvExePath '"' ExeResolver.GetInstanceArgs() ' -search "' evSearch '"' evShowFolderSpace)
-            } else {
-                if !WinActive("ahk_class EVERYTHING")
-                    WinActivate("ahk_class EVERYTHING")
-                else
-                    WinMinimize("ahk_class EVERYTHING")
-            }
-        } else {
+        if evSearch {
             ExeResolver.StartEverything()
-            if evSearch {
-                Run('"' ExeResolver.EvExePath '"' ExeResolver.GetInstanceArgs() ' -search "' evSearch '"' evShowFolderSpace)
-            }
+            Run('"' ExeResolver.EvExePath '"' ExeResolver.GetInstanceArgs() ' -search "' evSearch '"' evShowFolderSpace)
+        } else {
+            hwnd := ExeResolver.FindEverythingWindow(true)
+            if hwnd {
+                if !WinActive("ahk_id " hwnd)
+                    WinActivate("ahk_id " hwnd)
+                else
+                    WinMinimize("ahk_id " hwnd)
+            } else
+                ExeResolver.StartEverything()
         }
         DetectHiddenWindows(false)
     }
