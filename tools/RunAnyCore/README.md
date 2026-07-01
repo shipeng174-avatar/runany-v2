@@ -9,6 +9,9 @@ zig build -Doptimize=ReleaseSmall
 .\zig-out\bin\RunAnyCore.exe cache stats ..\..\RunAny_exe_paths.txt
 .\zig-out\bin\RunAnyCore.exe cache compact ..\..\RunAny_exe_paths.txt
 .\zig-out\bin\RunAnyCore.exe cache compact ..\..\RunAny_exe_paths.txt --write
+.\zig-out\bin\RunAnyCore.exe cache rebuild ..\..\RunAny_exe_paths.txt --menu ..\..\RunAny.ini --everything-dll ..\..\Everything64.dll --everything-exe ..\..\Everything\Everything.exe --write
 ```
 
 The cache compact command normalizes keys to lowercase `.exe` names and removes duplicate aliases.
+
+The cache rebuild command parses RunAny menu files, extracts direct no-path `.exe` entries, merges them with the existing cache, and resolves missing entries through the bundled Everything SDK in batches. RunAny starts this command as a delayed background worker, so menu startup does not wait for Zig or Everything.

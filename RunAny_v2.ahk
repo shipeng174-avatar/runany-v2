@@ -974,6 +974,7 @@ Init() {
 
     SetupAutoReload()
     SetupTrayMenu()
+    PathCache.ScheduleBackgroundRefresh()
 
     if ConfigReader.ReadSetting("HideMenuTrayIcon", "0") = "1"
         A_IconHidden := true

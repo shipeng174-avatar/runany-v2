@@ -45,6 +45,60 @@ class PathCache {
             PathCache.Compact()
     }
 
+    static ScheduleBackgroundRefresh() {
+        if ConfigReader.ReadSetting("ZigCacheWorker", "1") != "1"
+            return
+        delay := Integer(ConfigReader.ReadSetting("ZigCacheWorkerDelayMs", "1500"))
+        if delay < 100
+            delay := 100
+        SetTimer(() => PathCache.RunBackgroundRefresh(), -delay)
+    }
+
+    static RunBackgroundRefresh() {
+        static started := false
+        global INI_PATH, INI2_PATH
+
+        if started
+            return
+        started := true
+
+        coreExe := ConfigReader.TransformVar(ConfigReader.ReadSetting("RunAnyCorePath", ""))
+        if coreExe = ""
+            coreExe := A_ScriptDir "\tools\RunAnyCore\zig-out\bin\RunAnyCore.exe"
+        if !FileExist(coreExe) {
+            altCore := A_ScriptDir "\tools\RunAnyCore\RunAnyCore.exe"
+            if FileExist(altCore)
+                coreExe := altCore
+            else
+                return
+        }
+        if ProcessExist("RunAnyCore.exe")
+            return
+
+        cmd := PathCache._QuoteArg(coreExe) " cache rebuild " PathCache._QuoteArg(PathCache.CACHE_FILE) " --menu " PathCache._QuoteArg(INI_PATH)
+        if FileExist(INI2_PATH)
+            cmd .= " --menu " PathCache._QuoteArg(INI2_PATH)
+
+        if ConfigReader.ReadSetting("EvNo", "0") != "1" {
+            dllPath := A_PtrSize = 8 ? A_ScriptDir "\Everything64.dll" : A_ScriptDir "\Everything.dll"
+            if FileExist(dllPath) {
+                cmd .= " --everything-dll " PathCache._QuoteArg(dllPath)
+                evExe := A_ScriptDir "\Everything\Everything.exe"
+                if FileExist(evExe) {
+                    cmd .= " --everything-exe " PathCache._QuoteArg(evExe)
+                }
+            }
+        }
+
+        logPath := A_Temp "\RunAnyCore-cache.log"
+        cmd .= " --write --log " PathCache._QuoteArg(logPath)
+        try Run(cmd, A_ScriptDir, "Hide")
+    }
+
+    static _QuoteArg(value) {
+        return '"' StrReplace(value, '"', '\"') '"'
+    }
+
     static NormalizeKey(exeName) {
         exeName := Trim(exeName)
         if exeName = ""
