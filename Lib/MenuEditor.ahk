@@ -48,8 +48,8 @@ class MenuEditor {
         MenuEditor.tv := tv
         MenuEditor.BuildTree(tv, MenuEditor.iniContent)
 
-        g.OnEvent("Close", (*) => (MenuEditor.AskSave(), g.Destroy(), MenuEditor.guiObj := ""))
-        g.OnEvent("Escape", (*) => (MenuEditor.AskSave(), g.Hide()))
+        g.OnEvent("Close", (*) => MenuEditor.CloseWindow(g))
+        g.OnEvent("Escape", (*) => MenuEditor.HideWindow(g))
         g.OnEvent("Size", (guiObj, minMax, w, h) => tv.Move(, , w - 20, h - 50))
 
         ; Context menu
@@ -91,6 +91,21 @@ class MenuEditor {
 
     static _IsMenuEditorWin(*) {
         return WinActive(APP_NAME " 菜单树管理")
+    }
+
+    static CloseWindow(g) {
+        if !MenuEditor.AskSave()
+            return true
+        g.Destroy()
+        MenuEditor.guiObj := ""
+        return true
+    }
+
+    static HideWindow(g) {
+        if !MenuEditor.AskSave()
+            return true
+        g.Hide()
+        return true
     }
 
     static GetParent(treeRoot, treeLevel) {
@@ -531,12 +546,13 @@ class MenuEditor {
 
     static AskSave() {
         if !MenuEditor.modified
-            return
+            return true
         result := MsgBox("菜单已修改，是否保存？", APP_NAME, 0x23)
         if result = "Yes"
-            MenuEditor.SaveToFile()
-        else if result = "Cancel"
-            return
+            return MenuEditor.SaveToFile()
+        if result = "Cancel"
+            return false
+        return true
     }
 
     static SaveToFile() {
@@ -561,10 +577,12 @@ class MenuEditor {
             f.Write(content)
             f.Close()
             MenuEditor.modified := false
-            ToolTip("菜单已保存")
-            SetTimer(() => ToolTip(), -2000)
+            ToolTip("菜单已保存，正在重启 RunAny...")
+            SetTimer(() => SafeReload(), -300)
+            return true
         } catch as e {
             MsgBox("保存失败: " e.Message, APP_NAME, 48)
+            return false
         }
     }
 
