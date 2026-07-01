@@ -201,21 +201,8 @@ class ExeResolver {
             }
         }
         PathCache.BatchSave(newCache)
-        for exeName in uncached {
-            exeNoExt := RegExReplace(exeName, "i)\.exe$")
-            if !g_PathCache.Has(exeName) && !g_PathCache.Has(exeNoExt) {
-                g_PathNotFound[exeName] := true
-                g_PathNotFound[exeNoExt] := true
-            }
-        }
-        notFoundBuf := ""
-        for exeName in uncached {
-            exeNoExt := RegExReplace(exeName, "i)\.exe$")
-            if !g_PathCache.Has(exeName) && !g_PathCache.Has(exeNoExt)
-                notFoundBuf .= exeName "=*`n"
-        }
-        if notFoundBuf != ""
-            try FileAppend(notFoundBuf, PathCache.CACHE_FILE)
+        ; Do not persist batch misses. Everything can return partial/empty results
+        ; while starting or reindexing; on-demand Find() can retry later.
         EverythingSDK.SetRegex(false)
     }
 

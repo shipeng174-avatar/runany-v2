@@ -20,8 +20,9 @@ class PathCache {
                     if val = ""
                         continue
                     if val = "*" {
-                        ; "*" 标记为未找到（Persist g_PathNotFound）
-                        g_PathNotFound[exeName] := true
+                        ; Old versions persisted transient Everything misses as "*".
+                        ; Ignore them so moved/new apps can be resolved again.
+                        continue
                     } else if FileExist(val) {
                         g_PathCache[exeName] := val
                         noExt := RegExReplace(exeName, "i)\.exe$")
@@ -50,4 +51,3 @@ class PathCache {
             try FileAppend(buf, PathCache.CACHE_FILE)
     }
 }
-
